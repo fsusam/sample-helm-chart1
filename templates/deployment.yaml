@@ -1,0 +1,210 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: {{ template "eric-data-document-database-pg.fullname" . }}
+  labels:
+    app: {{ template "eric-data-document-database-pg.name" . }}
+    chart: {{ template "eric-data-document-database-pg.chart" . }}
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+spec:
+  strategy:
+    rollingUpdate:
+      maxSurge: {{ .Values.updateStrategy.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ .Values.updateStrategy.rollingUpdate.maxUnavailable }}
+    type: {{ .Values.updateStrategy.type }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "eric-data-document-database-pg.name" . }}
+    spec:
+      {{- if .Values.affinity }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
+      {{- end }}
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      {{- end }}
+      {{- if .Values.schedulerName }}
+      schedulerName: "{{ .Values.schedulerName }}"
+      {{- end }}
+      containers:
+      - name: {{ index .Values "images" "eric-data-document-database-pg" "name" }}
+        image: "{{ .Values.global.registry.url }}/{{ .Values.imageCredentials.repoPath }}/{{ index .Values "images" "eric-data-document-database-pg" "name" }}:{{ index .Values "images" "eric-data-document-database-pg" "tag" }}"
+        imagePullPolicy: {{ default "" .Values.imageCredentials.pullPolicy | quote }}
+        args:
+          {{- range $key, $value := default dict .Values.postgresConfig }}
+          - -c
+          - '{{ $key | snakecase }}={{ $value }}'
+          {{- end }}
+        env:
+        - name: POSTGRES_USER
+          {{- if .Values.credentials }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.credentials.kubernetesSecretName }}
+              key: {{ .Values.credentials.keyForUserId }}
+          {{- else }}
+          value: {{ default "postgres" .Values.postgresUser | quote }}
+          {{- end }}
+          # Required for pg_isready in the health probes.
+        - name: PGUSER
+          value: postgres
+        - name: POSTGRES_DB
+          value: {{ default "" .Values.postgresDatabase | quote }}
+        - name: POSTGRES_INITDB_ARGS
+          value: {{ default "" .Values.postgresInitdbArgs | quote }}
+        - name: PGDATA
+          value: {{ template "eric-data-document-database-pg.mountPath" . }}/pgdata
+        - name: POSTGRES_PASSWORD
+          {{- if .Values.credentials }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.credentials.kubernetesSecretName }}
+              key: {{ .Values.credentials.keyForUserPw }}
+          {{- else }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "eric-data-document-database-pg.fullname" . }}
+              key: postgres-password
+          {{- end }}
+        - name: POSTGRES_DEFAULT_PWD
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "eric-data-document-database-pg.fullname" . }}
+              key: postgres-default-pwd
+        - name: METRICSUSER
+          value: {{ default "exporter" .Values.metricsDefUser | quote}}
+        - name: METRICSPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "eric-data-document-database-pg.fullname" . }}
+              key: metrics-default-pwd
+        - name: PG_REPLICA_USER
+          value: {{ .Values.persistence.backup.replicaUser }}
+        - name: PG_REPLICA_PWD
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "eric-data-document-database-pg.fullname" . }}
+              key: replica-default-pwd
+        - name: PG_BACKUP_ENABLED
+          value: {{ .Values.persistence.backup.enabled | quote }}
+        - name: PG_BACKUP_MOUNTPATH
+          value: {{ .Values.persistence.backup.mountPath | quote }}
+        - name: PG_BACKUP_DATA_DIR
+          value: {{ .Values.restore.backupDataDir }}
+        - name: LOGGING_COLLECTOR
+          value: {{ .Values.postgresLogging.enabled | quote }}
+        - name: POD_IP
+          valueFrom: { fieldRef: { fieldPath: status.podIP } }
+        ports:
+        - name: postgresql
+          containerPort: 5432
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - exec pg_isready --host $POD_IP
+          initialDelaySeconds: 300
+          timeoutSeconds: 5
+          failureThreshold: 6
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - exec pg_isready --host $POD_IP
+          initialDelaySeconds: 20
+          timeoutSeconds: 3
+          periodSeconds: 5
+        lifecycle:
+          preStop:
+            exec:
+              command:
+                - "/usr/local/bin/pre-stop.sh"
+        resources:
+{{ toYaml .Values.resources | indent 10 }}
+        volumeMounts:
+        - name: data
+          mountPath: {{ template "eric-data-document-database-pg.mountPath" . }}
+          subPath: {{ .Values.persistence.subPath }}
+        {{- if .Values.persistence.backup.enabled }}
+        - name: backup-data
+          mountPath: {{ .Values.persistence.backup.mountPath }}
+        {{- end }}
+        - name: pre-rollback
+          mountPath: {{ .Values.persistence.rollback.mountPath }}
+{{- if .Values.metrics.enabled }}
+      - name: {{ index .Values "images" "eric-data-document-database-pg" "name" }}-metrics
+        image: {{ .Values.global.registry.url }}/{{ .Values.imageCredentials.repoPath }}/{{ .Values.images.metrics.name }}:{{ .Values.images.metrics.tag }}
+        imagePullPolicy: {{ default "" .Values.imageCredentials.pullPolicy | quote }}
+        env:
+        - name: DATA_SOURCE_PASS
+          valueFrom:
+            secretKeyRef:
+              name: {{ template "eric-data-document-database-pg.fullname" . }}
+              key: metrics-default-pwd
+        - name: DATA_SOURCE_URI
+          value: "127.0.0.1:5432/postgres?sslmode=disable"
+        - name: DATA_SOURCE_USER
+          value: {{ .Values.metricsDefUser }}
+        - name: METRICS_LOG_LEVEL
+          value: {{ .Values.metrics.logLevel }}
+        ports:
+        - name: metrics
+          containerPort: 9187
+        livenessProbe:
+          tcpSocket:
+            port: 9187
+          initialDelaySeconds: 300
+          timeoutSeconds: 5
+          failureThreshold: 6
+        readinessProbe:
+          tcpSocket:
+            port: 9187
+          initialDelaySeconds: 20
+          timeoutSeconds: 3
+          periodSeconds: 5
+        args: ["--log.level", $(METRICS_LOG_LEVEL), "--extend.query-path", "/conf/queries.yaml"]
+        volumeMounts:
+          - name: config-volume
+            mountPath: /conf
+        resources:
+{{ toYaml .Values.metrics.resources | indent 10 }}
+{{- end }}
+      volumes:
+      - name: data
+      {{- if .Values.persistence.enabled }}
+        persistentVolumeClaim:
+          claimName: {{ .Values.persistence.existingClaim | default (include "eric-data-document-database-pg.fullname" .) }}
+      {{- else }}
+        emptyDir: {}
+      {{- end }}
+      {{- if .Values.persistence.backup.enabled }}
+      - name: backup-data
+        persistentVolumeClaim:
+      {{- if .Values.persistence.backup.existingClaim }}
+          claimName: {{ .Values.persistence.backup.existingClaim }}
+      {{- else }}
+          claimName: {{ template "eric-data-document-database-pg.name" . }}-backup-pvc
+      {{- end}}
+      {{- end }}
+      {{- if .Values.metrics.enabled }}
+      - name: config-volume
+        configMap:
+          name: {{ template "eric-data-document-database-pg.fullname" . }}-metrics
+      {{- end }}
+      - name: pre-rollback
+        configMap:
+          name: {{ template "eric-data-document-database-pg.fullname" . }}-rollback
+          defaultMode: 0777
+      {{- if .Values.imageCredentials.registry.pullSecret }}
+      imagePullSecrets:
+        - name: {{ .Values.imageCredentials.registry.pullSecret }}
+      {{- end }}

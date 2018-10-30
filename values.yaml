@@ -1,0 +1,80 @@
+---
+global:
+  registry:
+    url: "armdocker.rnd.ericsson.se"
+imageCredentials:
+  repoPath: "proj-document-database-pg/data"
+  registry:
+    pullSecret: 
+images:
+  eric-data-document-database-pg:
+    name: eric-data-document-database-pg
+    tag: "1.1.0-159"
+  metrics:
+    name: pm-counter
+    tag: v0.4.6
+postgresDefPwd: Postgres1#
+postgresLogging:
+  enabled: false
+metricsDefUser: exporter
+metricsDefPwd: exporter
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 8Gi
+  subPath: postgresql-db
+  backup:
+    enabled: false
+    replicaUser: replica
+    replicaPwd: replica
+    accessMode: ReadWriteOnce
+    mountPath: "/mnt/pg_backup"
+    size: 8Gi
+    annotations:
+      helm.sh/resource-policy: keep
+  rollback:
+    mountPath: "/mnt/prerollback"
+restore:
+  backupDataDir: ''
+metrics:
+  enabled: true
+  logLevel: info
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+  service:
+    port: 9187
+  queryMetrics:
+    pg_postmaster:
+      query: SELECT pg_postmaster_start_time as start_time_seconds from pg_postmaster_start_time()
+      metrics:
+      - start_time_seconds:
+          usage: GAUGE
+          description: Time at which postmaster started
+    pg_database:
+      query: " SELECT pg_database.datname, pg_database_size(pg_database.datname) as
+        size FROM pg_database"
+      metrics:
+      - datname:
+          usage: LABEL
+          description: Name of the database
+      - size:
+          usage: GAUGE
+          description: Disk space used by the database
+resources:
+  requests:
+    memory: 256Mi
+    cpu: 100m
+service:
+  type: ClusterIP
+  port: 5432
+  externalIPs: []
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,0 +1,30 @@
+{{- if .Values.networkPolicy }}
+{{- if .Values.networkPolicy.enabled }}
+kind: NetworkPolicy
+apiVersion: {{ template "eric-data-document-database-pg.networkPolicy.apiVersion" . }}
+metadata:
+  name: "{{ template "eric-data-document-database-pg.fullname" . }}"
+  labels:
+    app: {{ template "eric-data-document-database-pg.name" . }}
+    chart: {{ template "eric-data-document-database-pg.chart" . }}
+    release: "{{ .Release.Name }}"
+    heritage: "{{ .Release.Service }}"
+spec:
+  podSelector:
+    matchLabels:
+      app: "{{ template "eric-data-document-database-pg.name" . }}"
+  ingress:
+    # Allow inbound connections
+    - ports:
+      - port: 5432
+    {{- if not .Values.networkPolicy.allowExternal }}
+      from:
+      - podSelector:
+          matchLabels:
+            {{ template "eric-data-document-database-pg.name" . }}-client: "true"
+    {{- end }}
+    # Allow prometheus scrapes
+    - ports:
+      - port: 9187
+{{- end }}
+{{- end }}
